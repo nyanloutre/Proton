@@ -18,7 +18,7 @@ from filelock import FileLock
 #To enable debug logging, copy "user_settings.sample.py" to "user_settings.py"
 #and edit it if needed.
 
-CURRENT_PREFIX_VERSION="3.16-1"
+CURRENT_PREFIX_VERSION="3.16-2"
 
 PFX="Proton: "
 ld_path_var = "LD_LIBRARY_PATH"
@@ -88,6 +88,31 @@ def upgrade_pfx(old_ver):
                 log("Detected broken 64-bit-only installation, re-creating prefix.")
                 shutil.rmtree(prefix)
                 return
+
+        if old_proton_ver == "3.7" or old_proton_ver == "3.16" and old_prefix_ver == "1":
+            #proton 3.7 and older 3.16 used symlinks to install DXVK. this is
+            # no longer needed, restore to correct wine configuration
+            log("Fixing up d3d11 symlinks")
+
+            #64-bit
+            link_dir = prefix + "drive_c/windows/system32"
+            dll_dir = basedir + "/dist/lib64/wine/fakedlls"
+            if os.path.lexists(link_dir + "/d3d11.dll"):
+                os.remove(link_dir + "/d3d11.dll")
+            if os.path.lexists(link_dir + "/dxgi.dll"):
+                os.remove(link_dir + "/dxgi.dll")
+            shutil.copy(dll_dir + "/d3d11.dll", link_dir + "/d3d11.dll")
+            shutil.copy(dll_dir + "/dxgi.dll", link_dir + "/dxgi.dll")
+
+            #32-bit
+            link_dir = prefix + "drive_c/windows/syswow64"
+            dll_dir = basedir + "/dist/lib/wine/fakedlls"
+            if os.path.lexists(link_dir + "/d3d11.dll"):
+                os.remove(link_dir + "/d3d11.dll")
+            if os.path.lexists(link_dir + "/dxgi.dll"):
+                os.remove(link_dir + "/dxgi.dll")
+            shutil.copy(dll_dir + "/d3d11.dll", link_dir + "/d3d11.dll")
+            shutil.copy(dll_dir + "/dxgi.dll", link_dir + "/dxgi.dll")
 
     except ValueError:
         log("Prefix has an invalid version?! You may want to back up user files and delete this prefix.")
@@ -224,6 +249,11 @@ check_environment("PROTON_NO_ESYNC", "noesync")
 if not "noesync" in config_opts:
     env["WINEESYNC"] = "1"
 
+if "wined3d11" in config_opts:
+    env["WINEDLLPATH"] = lib64dir + "/wine/wined3d:" + libdir + "/wine/wined3d:" + env["WINEDLLPATH"]
+else:
+    env["WINEDLLPATH"] = lib64dir + "/wine/dxvk:" + libdir + "/wine/dxvk:" + env["WINEDLLPATH"]
+
 lfile = None
 if "SteamGameId" in env:
     if env["WINEDEBUG"] != "-all":
@@ -299,9 +329,6 @@ with prefix_lock:
     shutil.copy(basedir + "/dist/lib/wine/fakedlls/vrclient.dll", dst)
     shutil.copy(basedir + "/dist/lib64/wine/fakedlls/vrclient_x64.dll", dst)
 
-    shutil.copy(basedir + "/dist/lib/wine/dxvk/openvr_api_dxvk.dll", prefix + "/drive_c/windows/syswow64/")
-    shutil.copy(basedir + "/dist/lib64/wine/dxvk/openvr_api_dxvk.dll", prefix + "/drive_c/windows/system32/")
-
     #parse linux openvr config and present it in win32 format to the app.
     #logic from openvr's CVRPathRegistry_Public::GetPaths
 
@@ -372,30 +399,6 @@ with prefix_lock:
                 json.dump(j, vfile, indent=2)
         except (ValueError, OSError):
             log("Unable to write VR config! " + str(sys.exc_info()[1]))
-
-    dxvkfiles = ("d3d11", "d3d10", "d3d10core", "d3d10_1", "dxgi")
-    def make_dxvk_links(dll_dir, link_dir):
-        for f in dxvkfiles:
-            dst = link_dir + "/" + f + ".dll"
-            src = dll_dir + "/" + f + ".dll"
-            if os.path.lexists(dst):
-                os.remove(dst)
-            os.symlink(src, dst)
-
-    if "wined3d" in config_opts:
-        #use gl-based wined3d for d3d11 and d3d10
-        make_dxvk_links(basedir + "/dist/lib64/wine/fakedlls/",
-            prefix + "drive_c/windows/system32")
-        make_dxvk_links(basedir + "/dist/lib/wine/fakedlls/",
-            prefix + "drive_c/windows/syswow64")
-    else:
-        #use vulkan-based dxvk for d3d11 and d3d10
-        make_dxvk_links(basedir + "/dist/lib64/wine/dxvk/",
-            prefix + "drive_c/windows/system32")
-        make_dxvk_links(basedir + "/dist/lib/wine/dxvk/",
-            prefix + "drive_c/windows/syswow64")
-        for f in dxvkfiles:
-            dlloverrides[f] = "n"
 
 if "nod3d11" in config_opts:
     dlloverrides["d3d11"] = ""
